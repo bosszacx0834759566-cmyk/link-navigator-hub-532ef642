@@ -30,6 +30,17 @@ import {
   type WeatherCell,
 } from '@/lib/ololink';
 import type { OloLinkState, Selection } from '@/hooks/use-ololink';
+import { LabelLayer, LabelProjector, useLabel } from '@/components/ololink/label-layer';
+import {
+  CAMERA_PRESETS,
+  OPERATIONAL_VIEW,
+  fitView,
+  pointView,
+  presetView,
+  stationInto,
+  type CameraView,
+  type PresetId,
+} from '@/lib/camera-presets';
 import {
   LAYER,
   LAYER_STACK,
@@ -1130,6 +1141,48 @@ function AssetNode({
     }
   });
 
+  /* label rendering is delegated to the decluttered screen-space layer */
+  useLabel(
+    showLabel || hover || selected
+      ? {
+          id: `asset-${asset.id}`,
+          text: asset.name,
+          sub: `${LAYER[asset.kind].label} · ${LAYER[asset.kind].altitude}`,
+          detail: [
+            asset.role,
+            `${asset.health} · ${asset.altKm > 0 ? `${asset.altKm} km` : 'surface'}`,
+            linking ? 'Comm window active' : '',
+          ].filter(Boolean) as string[],
+          color: LAYER[asset.kind].color,
+          priority: selected
+            ? 130
+            : hover
+              ? 120
+              : onRoute
+                ? 70
+                : linking
+                  ? 60
+                  : asset.kind === 'ground'
+                    ? 45
+                    : asset.kind === 'satellite'
+                      ? 30
+                      : 25,
+          minTier:
+            asset.kind === 'satellite' || asset.kind === 'ground'
+              ? 'global'
+              : asset.kind === 'customer'
+                ? 'local'
+                : 'regional',
+          emphasis: selected || hover || onRoute,
+          getPosition: (out) => {
+            const p = live.get(asset.id);
+            if (!p) return null;
+            return out.copy(p).setLength(p.length() + s * 3.4);
+          },
+        }
+      : null
+  );
+
   return (
     <group ref={root} position={position} quaternion={quat}>
       <group
@@ -1184,25 +1237,6 @@ function AssetNode({
         </line>
       )}
 
-      {(showLabel || hover || selected) && (
-        <Html center distanceFactor={1.6} position={[0, s * 4.6, 0]} zIndexRange={[20, 0]}>
-          <div
-            className={`pointer-events-none select-none whitespace-nowrap text-center font-mono uppercase transition-opacity ${
-              selected || hover ? 'text-foreground' : 'text-foreground/55'
-            }`}
-          >
-            <div className="text-[9px] tracking-[0.18em]">{asset.name}</div>
-            {detail && (
-              <div
-                className="text-[8px] tracking-[0.16em]"
-                style={{ color: LAYER[asset.kind].color, opacity: 0.65 }}
-              >
-                {LAYER[asset.kind].label} · {LAYER[asset.kind].altitude}
-              </div>
-            )}
-          </div>
-        </Html>
-      )}
     </group>
   );
 }
@@ -1508,15 +1542,15 @@ function CameraRig({
   live,
   approach,
   controls,
-  flyTo,
+  view,
   onArrive,
 }: {
   focusIds: string[] | null;
   live: LiveMap;
   approach: number;
   controls: React.RefObject<any>;
-  /** one-shot camera transition to a point on the globe */
-  flyTo: { point: THREE.Vector3; distance: number } | null;
+  /** one-shot smooth transition to a pre-designed readable framing */
+  view: CameraView | null;
   onArrive: () => void;
 }) {
   const desired = useRef(new THREE.Vector3());
@@ -1526,13 +1560,16 @@ function CameraRig({
     if (!c) return;
     const k = 1 - Math.exp(-2.6 * d);
 
-    if (flyTo) {
-      const t = flyTo.point;
-      c.target.lerp(t, k * 0.9);
-      desired.current.copy(t).setLength(flyTo.distance);
-      camera.position.lerp(desired.current, k * 0.8);
+    if (view) {
+      c.target.lerp(view.target, k * 0.9);
+      camera.position.lerp(view.position, k * 0.85);
       c.update();
-      if (camera.position.distanceTo(desired.current) < 0.035) onArrive();
+      if (
+        camera.position.distanceTo(view.position) < 0.03 &&
+        c.target.distanceTo(view.target) < 0.03
+      ) {
+        onArrive();
+      }
       return;
     }
 
@@ -1550,8 +1587,9 @@ function CameraRig({
       target.current.multiplyScalar(1 / n);
       const t = target.current;
       c.target.lerp(t, k);
-      const dist = Math.max(1.5, t.length() + approach);
-      desired.current.copy(t).setLength(dist);
+      // rotate + zoom so the selection sits clearly off the limb, never edge-on
+      const dist = Math.max(1.52, t.length() + approach);
+      stationInto(desired.current, t, dist, 18, 10);
       camera.position.lerp(desired.current, k * 0.95);
     } else {
       c.target.lerp(new THREE.Vector3(0, 0, 0), k * 0.6);
@@ -1563,7 +1601,19 @@ function CameraRig({
 
 /* ------------------------------------------------------------ the scene */
 
-function SceneContent({ state, onLod }: { state: OloLinkState; onLod: (s: LodState) => void }) {
+function SceneContent({
+  state,
+  onLod,
+  preset,
+  presetSeq,
+  onPresetDone,
+}: {
+  state: OloLinkState;
+  onLod: (s: LodState) => void;
+  preset: PresetId | null;
+  presetSeq: number;
+  onPresetDone: () => void;
+}) {
   const { profile, links, selection, select, layers, route, previousRoute, rerouteSeq } = state;
   const controls = useRef<any>(null);
 
@@ -1602,11 +1652,30 @@ function SceneContent({ state, onLod }: { state: OloLinkState; onLod: (s: LodSta
   /* ------------------------------------------------------ level of detail */
 
   const [lod, setLod] = useState<LodState>({ level: 'global', region: null });
-  const [flyTo, setFlyTo] = useState<{ point: THREE.Vector3; distance: number } | null>(null);
+  const [view, setView] = useState<CameraView | null>(null);
 
   useEffect(() => {
     onLod(lod);
   }, [lod, onLod]);
+
+  /* smart camera presets -> a pre-designed readable framing */
+  useEffect(() => {
+    if (!preset) return;
+    if (preset === 'active-link') {
+      const points: THREE.Vector3[] = [];
+      for (const id of profile.route) {
+        const p = live.get(id);
+        if (p) points.push(p.clone());
+      }
+      const v = fitView(points, 20);
+      if (v) setView(v);
+    } else {
+      const v = presetView(preset);
+      if (v) setView(v);
+    }
+    select(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset, presetSeq]);
 
   /** the region the operator is working in: camera-derived, or the selection's */
   const activeRegion = useMemo(() => {
@@ -1718,10 +1787,7 @@ function SceneContent({ state, onLod }: { state: OloLinkState; onLod: (s: LodSta
             counts={regionCounts[r.id]!}
             onFocus={(reg) => {
               select(null);
-              setFlyTo({
-                point: new THREE.Vector3(...geoOnShell(reg.lat, reg.lon, 1.06)),
-                distance: 1.72,
-              });
+              setView(presetView(reg.id as PresetId) ?? pointView(new THREE.Vector3(...geoOnShell(reg.lat, reg.lon, 1.06)), 1.95, 24));
             }}
           />
         ))}
@@ -1809,17 +1875,21 @@ function SceneContent({ state, onLod }: { state: OloLinkState; onLod: (s: LodSta
         rotateSpeed={0.45}
         minDistance={1.32}
         maxDistance={5.2}
-        autoRotate={!selection && !flyTo && lod.level === 'global' && state.running}
+        autoRotate={!selection && !view && lod.level === 'global' && state.running}
         autoRotateSpeed={0.22}
       />
       <CameraRig
-        focusIds={flyTo ? null : focus}
+        focusIds={view ? null : focus}
         live={live}
         approach={approach}
         controls={controls}
-        flyTo={flyTo}
-        onArrive={() => setFlyTo(null)}
+        view={view}
+        onArrive={() => {
+          setView(null);
+          onPresetDone();
+        }}
       />
+      <LabelProjector tier={lod.level} />
     </>
   );
 }
@@ -1827,12 +1897,19 @@ function SceneContent({ state, onLod }: { state: OloLinkState; onLod: (s: LodSta
 export function GlobeScene({ state }: { state: OloLinkState }) {
   const [lod, setLod] = useState<LodState>({ level: 'global', region: null });
   const onLod = useMemo(() => (s: LodState) => setLod(s), []);
+  const [preset, setPreset] = useState<PresetId | null>(null);
+  const [presetSeq, setPresetSeq] = useState(0);
+
+  const goTo = (id: PresetId) => {
+    setPreset(id);
+    setPresetSeq((n) => n + 1);
+  };
 
   return (
-    <>
+    <LabelLayer tier={lod.level}>
       <Canvas
         /* framed over the Pacific so both Thailand and the United States are in view */
-        camera={{ position: [-2.807, 1.31, -0.123], fov: 42 }}
+        camera={{ position: [OPERATIONAL_VIEW.position.x, OPERATIONAL_VIEW.position.y, OPERATIONAL_VIEW.position.z], fov: 42 }}
         dpr={[1, 2]}
         gl={{ antialias: true }}
         onPointerMissed={() => state.select(null)}
@@ -1840,7 +1917,13 @@ export function GlobeScene({ state }: { state: OloLinkState }) {
       >
         <color attach="background" args={['#000000']} />
         <LodContext.Provider value={lod}>
-          <SceneContent state={state} onLod={onLod} />
+          <SceneContent
+            state={state}
+            onLod={onLod}
+            preset={preset}
+            presetSeq={presetSeq}
+            onPresetDone={() => setPreset(null)}
+          />
         </LodContext.Provider>
       </Canvas>
 
@@ -1861,7 +1944,37 @@ export function GlobeScene({ state }: { state: OloLinkState }) {
           </span>
         </div>
       </div>
-    </>
+
+      {/* smart camera presets — known-good readable angles */}
+      <div className="absolute left-1/2 top-[100px] z-20 -translate-x-1/2">
+        <div className="flex items-center gap-1 rounded-full border border-white/[0.07] bg-[#070b14]/70 px-1.5 py-1 backdrop-blur-md">
+          {CAMERA_PRESETS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              title={p.hint}
+              onClick={() => goTo(p.id)}
+              className={`rounded-full px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.2em] transition-colors ${
+                preset === p.id
+                  ? 'bg-sky-300/15 text-sky-100'
+                  : 'text-sky-100/50 hover:bg-white/[0.06] hover:text-sky-100/90'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+          <span className="mx-0.5 h-3 w-px bg-white/10" />
+          <button
+            type="button"
+            title="Return to the optimal readable operational angle"
+            onClick={() => goTo('global')}
+            className="rounded-full border border-sky-300/25 px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.2em] text-sky-200/80 transition-colors hover:border-sky-300/60 hover:text-sky-100"
+          >
+            Operational View
+          </button>
+        </div>
+      </div>
+    </LabelLayer>
   );
 }
 
