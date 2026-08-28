@@ -30,6 +30,15 @@ import {
   type WeatherCell,
 } from '@/lib/ololink';
 import type { OloLinkState, Selection } from '@/hooks/use-ololink';
+import { LabelLayer, LabelProjector, useLabel } from '@/components/ololink/label-layer';
+import {
+  CAMERA_PRESETS,
+  OPERATIONAL_VIEW,
+  presetView,
+  stationInto,
+  type CameraView,
+  type PresetId,
+} from '@/lib/camera-presets';
 import {
   LAYER,
   LAYER_STACK,
@@ -1226,25 +1235,6 @@ function AssetNode({
         </line>
       )}
 
-      {(showLabel || hover || selected) && (
-        <Html center distanceFactor={1.6} position={[0, s * 4.6, 0]} zIndexRange={[20, 0]}>
-          <div
-            className={`pointer-events-none select-none whitespace-nowrap text-center font-mono uppercase transition-opacity ${
-              selected || hover ? 'text-foreground' : 'text-foreground/55'
-            }`}
-          >
-            <div className="text-[9px] tracking-[0.18em]">{asset.name}</div>
-            {detail && (
-              <div
-                className="text-[8px] tracking-[0.16em]"
-                style={{ color: LAYER[asset.kind].color, opacity: 0.65 }}
-              >
-                {LAYER[asset.kind].label} · {LAYER[asset.kind].altitude}
-              </div>
-            )}
-          </div>
-        </Html>
-      )}
     </group>
   );
 }
@@ -1550,15 +1540,15 @@ function CameraRig({
   live,
   approach,
   controls,
-  flyTo,
+  view,
   onArrive,
 }: {
   focusIds: string[] | null;
   live: LiveMap;
   approach: number;
   controls: React.RefObject<any>;
-  /** one-shot camera transition to a point on the globe */
-  flyTo: { point: THREE.Vector3; distance: number } | null;
+  /** one-shot smooth transition to a pre-designed readable framing */
+  view: CameraView | null;
   onArrive: () => void;
 }) {
   const desired = useRef(new THREE.Vector3());
@@ -1568,13 +1558,16 @@ function CameraRig({
     if (!c) return;
     const k = 1 - Math.exp(-2.6 * d);
 
-    if (flyTo) {
-      const t = flyTo.point;
-      c.target.lerp(t, k * 0.9);
-      desired.current.copy(t).setLength(flyTo.distance);
-      camera.position.lerp(desired.current, k * 0.8);
+    if (view) {
+      c.target.lerp(view.target, k * 0.9);
+      camera.position.lerp(view.position, k * 0.85);
       c.update();
-      if (camera.position.distanceTo(desired.current) < 0.035) onArrive();
+      if (
+        camera.position.distanceTo(view.position) < 0.03 &&
+        c.target.distanceTo(view.target) < 0.03
+      ) {
+        onArrive();
+      }
       return;
     }
 
@@ -1592,8 +1585,9 @@ function CameraRig({
       target.current.multiplyScalar(1 / n);
       const t = target.current;
       c.target.lerp(t, k);
-      const dist = Math.max(1.5, t.length() + approach);
-      desired.current.copy(t).setLength(dist);
+      // rotate + zoom so the selection sits clearly off the limb, never edge-on
+      const dist = Math.max(1.52, t.length() + approach);
+      stationInto(desired.current, t, dist, 18, 10);
       camera.position.lerp(desired.current, k * 0.95);
     } else {
       c.target.lerp(new THREE.Vector3(0, 0, 0), k * 0.6);
