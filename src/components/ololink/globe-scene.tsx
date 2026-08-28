@@ -1902,12 +1902,19 @@ function SceneContent({
 export function GlobeScene({ state }: { state: OloLinkState }) {
   const [lod, setLod] = useState<LodState>({ level: 'global', region: null });
   const onLod = useMemo(() => (s: LodState) => setLod(s), []);
+  const [preset, setPreset] = useState<PresetId | null>(null);
+  const [presetSeq, setPresetSeq] = useState(0);
+
+  const goTo = (id: PresetId) => {
+    setPreset(id);
+    setPresetSeq((n) => n + 1);
+  };
 
   return (
-    <>
+    <LabelLayer tier={lod.level}>
       <Canvas
         /* framed over the Pacific so both Thailand and the United States are in view */
-        camera={{ position: [-2.807, 1.31, -0.123], fov: 42 }}
+        camera={{ position: [OPERATIONAL_VIEW.position.x, OPERATIONAL_VIEW.position.y, OPERATIONAL_VIEW.position.z], fov: 42 }}
         dpr={[1, 2]}
         gl={{ antialias: true }}
         onPointerMissed={() => state.select(null)}
@@ -1915,7 +1922,13 @@ export function GlobeScene({ state }: { state: OloLinkState }) {
       >
         <color attach="background" args={['#000000']} />
         <LodContext.Provider value={lod}>
-          <SceneContent state={state} onLod={onLod} />
+          <SceneContent
+            state={state}
+            onLod={onLod}
+            preset={preset}
+            presetSeq={presetSeq}
+            onPresetDone={() => setPreset(null)}
+          />
         </LodContext.Provider>
       </Canvas>
 
@@ -1936,7 +1949,37 @@ export function GlobeScene({ state }: { state: OloLinkState }) {
           </span>
         </div>
       </div>
-    </>
+
+      {/* smart camera presets — known-good readable angles */}
+      <div className="absolute left-1/2 top-[100px] z-20 -translate-x-1/2">
+        <div className="flex items-center gap-1 rounded-full border border-white/[0.07] bg-[#070b14]/70 px-1.5 py-1 backdrop-blur-md">
+          {CAMERA_PRESETS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              title={p.hint}
+              onClick={() => goTo(p.id)}
+              className={`rounded-full px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.2em] transition-colors ${
+                preset === p.id
+                  ? 'bg-sky-300/15 text-sky-100'
+                  : 'text-sky-100/50 hover:bg-white/[0.06] hover:text-sky-100/90'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+          <span className="mx-0.5 h-3 w-px bg-white/10" />
+          <button
+            type="button"
+            title="Return to the optimal readable operational angle"
+            onClick={() => goTo('global')}
+            className="rounded-full border border-sky-300/25 px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.2em] text-sky-200/80 transition-colors hover:border-sky-300/60 hover:text-sky-100"
+          >
+            Operational View
+          </button>
+        </div>
+      </div>
+    </LabelLayer>
   );
 }
 
