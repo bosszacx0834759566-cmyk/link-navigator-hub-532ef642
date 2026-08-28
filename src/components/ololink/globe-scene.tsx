@@ -1130,6 +1130,48 @@ function AssetNode({
     }
   });
 
+  /* label rendering is delegated to the decluttered screen-space layer */
+  useLabel(
+    showLabel || hover || selected
+      ? {
+          id: `asset-${asset.id}`,
+          text: asset.name,
+          sub: `${LAYER[asset.kind].label} · ${LAYER[asset.kind].altitude}`,
+          detail: [
+            asset.role,
+            `${asset.health} · ${asset.altKm > 0 ? `${asset.altKm} km` : 'surface'}`,
+            linking ? 'Comm window active' : '',
+          ].filter(Boolean) as string[],
+          color: LAYER[asset.kind].color,
+          priority: selected
+            ? 130
+            : hover
+              ? 120
+              : onRoute
+                ? 70
+                : linking
+                  ? 60
+                  : asset.kind === 'ground'
+                    ? 45
+                    : asset.kind === 'satellite'
+                      ? 30
+                      : 25,
+          minTier:
+            asset.kind === 'satellite' || asset.kind === 'ground'
+              ? 'global'
+              : asset.kind === 'customer'
+                ? 'local'
+                : 'regional',
+          emphasis: selected || hover || onRoute,
+          getPosition: (out) => {
+            const p = live.get(asset.id);
+            if (!p) return null;
+            return out.copy(p).setLength(p.length() + s * 3.4);
+          },
+        }
+      : null
+  );
+
   return (
     <group ref={root} position={position} quaternion={quat}>
       <group
