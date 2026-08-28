@@ -277,10 +277,10 @@ export function LabelLayer({
   useEffect(() => {
     const sync = () => setIds(Array.from(store.specs.keys()));
     sync();
+    const unsubscribe = store.subscribe(sync);
     return () => {
-      store.subscribe(sync)();
+      unsubscribe();
     };
-  }, [store]);
   }, [store]);
 
   const rank = TIER_RANK[tier];
