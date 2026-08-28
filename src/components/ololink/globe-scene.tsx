@@ -34,6 +34,7 @@ import { LabelLayer, LabelProjector, useLabel } from '@/components/ololink/label
 import {
   CAMERA_PRESETS,
   OPERATIONAL_VIEW,
+  pointView,
   presetView,
   stationInto,
   type CameraView,
@@ -1599,7 +1600,19 @@ function CameraRig({
 
 /* ------------------------------------------------------------ the scene */
 
-function SceneContent({ state, onLod }: { state: OloLinkState; onLod: (s: LodState) => void }) {
+function SceneContent({
+  state,
+  onLod,
+  preset,
+  presetSeq,
+  onPresetDone,
+}: {
+  state: OloLinkState;
+  onLod: (s: LodState) => void;
+  preset: PresetId | null;
+  presetSeq: number;
+  onPresetDone: () => void;
+}) {
   const { profile, links, selection, select, layers, route, previousRoute, rerouteSeq } = state;
   const controls = useRef<any>(null);
 
@@ -1638,11 +1651,36 @@ function SceneContent({ state, onLod }: { state: OloLinkState; onLod: (s: LodSta
   /* ------------------------------------------------------ level of detail */
 
   const [lod, setLod] = useState<LodState>({ level: 'global', region: null });
-  const [flyTo, setFlyTo] = useState<{ point: THREE.Vector3; distance: number } | null>(null);
+  const [view, setView] = useState<CameraView | null>(null);
 
   useEffect(() => {
     onLod(lod);
   }, [lod, onLod]);
+
+  /* smart camera presets -> a pre-designed readable framing */
+  useEffect(() => {
+    if (!preset) return;
+    if (preset === 'active-link') {
+      const centre = new THREE.Vector3();
+      let n = 0;
+      for (const id of profile.route) {
+        const p = live.get(id);
+        if (p) {
+          centre.add(p);
+          n += 1;
+        }
+      }
+      if (n > 0) {
+        centre.multiplyScalar(1 / n);
+        setView(pointView(centre, Math.max(2.0, centre.length() + 0.78), 22));
+      }
+    } else {
+      const v = presetView(preset);
+      if (v) setView(v);
+    }
+    select(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset, presetSeq]);
 
   /** the region the operator is working in: camera-derived, or the selection's */
   const activeRegion = useMemo(() => {
@@ -1754,10 +1792,7 @@ function SceneContent({ state, onLod }: { state: OloLinkState; onLod: (s: LodSta
             counts={regionCounts[r.id]!}
             onFocus={(reg) => {
               select(null);
-              setFlyTo({
-                point: new THREE.Vector3(...geoOnShell(reg.lat, reg.lon, 1.06)),
-                distance: 1.72,
-              });
+              setView(presetView(reg.id as PresetId) ?? pointView(new THREE.Vector3(...geoOnShell(reg.lat, reg.lon, 1.06)), 1.95, 24));
             }}
           />
         ))}
@@ -1845,17 +1880,21 @@ function SceneContent({ state, onLod }: { state: OloLinkState; onLod: (s: LodSta
         rotateSpeed={0.45}
         minDistance={1.32}
         maxDistance={5.2}
-        autoRotate={!selection && !flyTo && lod.level === 'global' && state.running}
+        autoRotate={!selection && !view && lod.level === 'global' && state.running}
         autoRotateSpeed={0.22}
       />
       <CameraRig
-        focusIds={flyTo ? null : focus}
+        focusIds={view ? null : focus}
         live={live}
         approach={approach}
         controls={controls}
-        flyTo={flyTo}
-        onArrive={() => setFlyTo(null)}
+        view={view}
+        onArrive={() => {
+          setView(null);
+          onPresetDone();
+        }}
       />
+      <LabelProjector tier={lod.level} />
     </>
   );
 }
