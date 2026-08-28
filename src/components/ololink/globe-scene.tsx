@@ -34,6 +34,7 @@ import { LabelLayer, LabelProjector, useLabel } from '@/components/ololink/label
 import {
   CAMERA_PRESETS,
   OPERATIONAL_VIEW,
+  fitView,
   pointView,
   presetView,
   stationInto,
@@ -1661,19 +1662,13 @@ function SceneContent({
   useEffect(() => {
     if (!preset) return;
     if (preset === 'active-link') {
-      const centre = new THREE.Vector3();
-      let n = 0;
+      const points: THREE.Vector3[] = [];
       for (const id of profile.route) {
         const p = live.get(id);
-        if (p) {
-          centre.add(p);
-          n += 1;
-        }
+        if (p) points.push(p.clone());
       }
-      if (n > 0) {
-        centre.multiplyScalar(1 / n);
-        setView(pointView(centre, Math.max(2.0, centre.length() + 0.78), 22));
-      }
+      const v = fitView(points, 20);
+      if (v) setView(v);
     } else {
       const v = presetView(preset);
       if (v) setView(v);
