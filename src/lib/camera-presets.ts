@@ -33,34 +33,46 @@ export const CAMERA_PRESETS: CameraPreset[] = [
 ];
 
 const NORTH = new THREE.Vector3(0, 1, 0);
+const S_UP = new THREE.Vector3();
+const S_EAST = new THREE.Vector3();
+const S_NORTH = new THREE.Vector3();
 
 /**
  * Station the camera above `target`, tilted `tiltDeg` toward the pole and
  * `swingDeg` along the local east axis so the altitude stack is seen at an
  * angle rather than straight down (flat, unreadable) framing.
  */
+export function stationInto(
+  out: THREE.Vector3,
+  target: THREE.Vector3,
+  distance: number,
+  tiltDeg = 22,
+  swingDeg = 12
+): THREE.Vector3 {
+  S_UP.copy(target).normalize();
+  S_EAST.crossVectors(NORTH, S_UP);
+  if (S_EAST.lengthSq() < 1e-6) S_EAST.set(1, 0, 0);
+  S_EAST.normalize();
+  S_NORTH.crossVectors(S_UP, S_EAST).normalize();
+
+  const tilt = THREE.MathUtils.degToRad(tiltDeg);
+  const swing = THREE.MathUtils.degToRad(swingDeg);
+
+  return out
+    .copy(S_UP)
+    .multiplyScalar(Math.cos(tilt) * Math.cos(swing))
+    .addScaledVector(S_NORTH, Math.sin(tilt))
+    .addScaledVector(S_EAST, Math.sin(swing))
+    .setLength(distance);
+}
+
 export function stationFor(
   target: THREE.Vector3,
   distance: number,
   tiltDeg = 22,
   swingDeg = 12
 ): THREE.Vector3 {
-  const up = target.clone().normalize();
-  const east = new THREE.Vector3().crossVectors(NORTH, up);
-  if (east.lengthSq() < 1e-6) east.set(1, 0, 0);
-  east.normalize();
-  const north = new THREE.Vector3().crossVectors(up, east).normalize();
-
-  const tilt = THREE.MathUtils.degToRad(tiltDeg);
-  const swing = THREE.MathUtils.degToRad(swingDeg);
-
-  return up
-    .clone()
-    .multiplyScalar(Math.cos(tilt) * Math.cos(swing))
-    .addScaledVector(north, Math.sin(tilt))
-    .addScaledVector(east, Math.sin(swing))
-    .normalize()
-    .multiplyScalar(distance);
+  return stationInto(new THREE.Vector3(), target, distance, tiltDeg, swingDeg);
 }
 
 /** Readable framing over a lat/lon on the globe. */
