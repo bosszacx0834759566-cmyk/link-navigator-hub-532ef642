@@ -94,19 +94,27 @@ export function useLabelStore() {
   return useContext(StoreContext);
 }
 
-/** Register a decluttered label from inside the Canvas. */
+/** Register a decluttered label from inside the Canvas. Pass null to remove it. */
 export function useLabel(spec: LabelSpec | null) {
   const store = useLabelStore();
-  const id = spec?.id;
+  const active = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!store || !spec) return;
-    store.set(spec);
+    if (!store) return;
+    if (spec) {
+      store.set(spec);
+      active.current = spec.id;
+    } else if (active.current) {
+      store.remove(active.current);
+      active.current = null;
+    }
   });
+
   useEffect(() => {
     return () => {
-      if (store && id) store.remove(id);
+      if (store && active.current) store.remove(active.current);
     };
-  }, [store, id]);
+  }, [store]);
 }
 
 const TIER_RANK: Record<LodLevel, number> = { global: 0, regional: 1, local: 2 };
